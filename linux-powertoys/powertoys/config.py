@@ -26,6 +26,14 @@ _DEFAULTS: Dict[str, Any] = {
         "screenruler": {"enabled": True, "unit": "pixels"},
         "textextractor": {"enabled": True, "hotkey": "<ctrl><shift>t"},
         "clipboard": {"enabled": True, "max_history": 50},
+        "alwaysontop": {"enabled": True},
+        "envvars": {"enabled": True},
+        "findmymouse": {"enabled": True, "radius": 100, "opacity": 0.7},
+        "pasteplain": {"enabled": True, "strip_html": True, "strip_markdown": False},
+        "peek": {"enabled": True, "max_preview_kb": 64},
+        "shortcutguide": {"enabled": True},
+        "videomute": {"enabled": True},
+        "workspaces": {"enabled": True},
     },
 }
 
