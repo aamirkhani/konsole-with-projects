@@ -71,6 +71,7 @@ class _CustomLayoutEditor(Gtk.Dialog):
         self._selected_zone: int = -1
         self._drag_start = None
         self._draw_start = None
+        self._draw_cur = None
 
         content = self.get_content_area()
         content.set_border_width(8)

@@ -109,15 +109,36 @@ def get_screen_size() -> Tuple[int, int]:
 
 
 def get_active_window_id() -> Optional[str]:
-    """Get X11 window ID of the focused window."""
+    """Get X11 window ID of the focused window as a hex string (wmctrl-compatible)."""
     try:
         result = subprocess.run(
             ["xdotool", "getactivewindow"],
             capture_output=True, text=True, timeout=3,
         )
-        return result.stdout.strip() if result.returncode == 0 else None
+        if result.returncode == 0:
+            dec = result.stdout.strip()
+            return hex(int(dec))   # convert decimal → hex for wmctrl
+    except (FileNotFoundError, subprocess.TimeoutExpired, ValueError):
+        pass
+    # Fallback: ask wmctrl for the active window
+    try:
+        result = subprocess.run(
+            ["wmctrl", "-a", ":ACTIVE:", "-v"],
+            capture_output=True, text=True, timeout=3,
+        )
+        # Try xprop _NET_ACTIVE_WINDOW
+        result2 = subprocess.run(
+            ["xprop", "-root", "_NET_ACTIVE_WINDOW"],
+            capture_output=True, text=True, timeout=3,
+        )
+        if result2.returncode == 0:
+            import re
+            m = re.search(r"0x[0-9a-fA-F]+", result2.stdout)
+            if m:
+                return m.group(0)
     except (FileNotFoundError, subprocess.TimeoutExpired):
-        return None
+        pass
+    return None
 
 
 def move_window_to_zone(window_id: str, zone: Zone, screen_w: int, screen_h: int, gap: int = 4):
@@ -126,17 +147,27 @@ def move_window_to_zone(window_id: str, zone: Zone, screen_w: int, screen_h: int
     # Apply gap
     x += gap; y += gap; w -= gap * 2; h -= gap * 2
 
-    # Try wmctrl first
+    # Unmaximize first — a maximized window ignores move/resize
     try:
         subprocess.run(
-            ["wmctrl", "-ir", window_id, "-e", f"0,{x},{y},{w},{h}"],
+            ["wmctrl", "-ir", window_id, "-b", "remove,maximized_vert,maximized_horz"],
             timeout=3,
         )
-        return
     except (FileNotFoundError, subprocess.TimeoutExpired):
         pass
 
-    # Fallback: xdotool
+    # Try wmctrl first (expects hex window ID)
+    try:
+        r = subprocess.run(
+            ["wmctrl", "-ir", window_id, "-e", f"0,{x},{y},{w},{h}"],
+            timeout=3,
+        )
+        if r.returncode == 0:
+            return
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+    # Fallback: xdotool (accepts decimal or hex)
     try:
         subprocess.run(
             ["xdotool", "windowmove", window_id, str(x), str(y)],
