@@ -1,0 +1,11 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Linux PowerToys
+Comment=Productivity utilities for Linux power users
+Exec=python3.12 -m powertoys
+Icon=applications-utilities
+Terminal=false
+Categories=Utility;
+Keywords=productivity;tools;rename;resize;hosts;color;keyboard;
+StartupNotify=true

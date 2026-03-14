@@ -1,0 +1,1 @@
+"""PowerToys module registry."""
