@@ -160,8 +160,10 @@ def get_dataloader(data_dir: str, image_size: int, batch_size: int) -> DataLoade
         transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]),
     ])
     dataset = datasets.ImageFolder(root=data_dir, transform=transform)
+    use_gpu = torch.cuda.is_available()
     return DataLoader(dataset, batch_size=batch_size, shuffle=True,
-                      num_workers=4, pin_memory=True, drop_last=True)
+                      num_workers=4 if use_gpu else 0,
+                      pin_memory=use_gpu, drop_last=True)
 
 
 # ---------------------------------------------------------------------------
@@ -207,8 +209,8 @@ def train(args: argparse.Namespace) -> None:
     print(f"Device: {device}  AMP: {use_amp}")
 
     # ---- Models ----
-    G = Generator(z_dim=args.z_dim, w_dim=args.w_dim).to(device)
-    D = Discriminator().to(device)
+    G = Generator(z_dim=args.z_dim, w_dim=args.w_dim, channel_cap=args.channel_cap).to(device)
+    D = Discriminator(channel_cap=args.channel_cap).to(device)
     print(f"G params: {count_params(G)}  |  D params: {count_params(D)}")
 
     G_ema = EMA(G, decay=args.ema_decay)
@@ -276,8 +278,11 @@ def train(args: argparse.Namespace) -> None:
 
         loss_D_sum = loss_G_sum = r1_sum = pl_sum = 0.0
         n_steps = 0
+        max_steps = args.steps_per_epoch if args.steps_per_epoch > 0 else len(dataloader)
 
-        for real_imgs, _ in dataloader:
+        for step_i, (real_imgs, _) in enumerate(dataloader):
+            if step_i >= max_steps:
+                break
             real_imgs = real_imgs.to(device)
             B = real_imgs.size(0)
 
@@ -358,11 +363,12 @@ def train(args: argparse.Namespace) -> None:
             if global_step % args.pl_interval == 0:
                 opt_G.zero_grad()
                 z2 = torch.randn(B, args.z_dim, device=device)
-                ws = G.mapping(z2)
-                # Need to re-run forward from ws
+                # Compute ws with grad enabled, then run synthesis on same graph
+                ws2 = G.mapping(z2)
+                ws2[0] = ws2[0].requires_grad_(True)
                 with autocast(enabled=use_amp):
-                    fake_for_pl = G(z2)
-                pl_pen, pl_mean = path_length_penalty(fake_for_pl, ws, pl_mean)
+                    fake_for_pl = G.synthesis_forward(ws2)
+                pl_pen, pl_mean = path_length_penalty(fake_for_pl, ws2, pl_mean)
                 loss_pl = pl_pen * args.pl_weight * args.pl_interval
                 scaler_G.scale(loss_pl).backward()
                 pl_val = pl_pen.item()
@@ -423,10 +429,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--epochs",      type=int,   default=500)
     p.add_argument("--batch_size",  type=int,   default=8,
                    help="Reduce if GPU OOM (heavy model)")
-    p.add_argument("--z_dim",       type=int,   default=512,
+    p.add_argument("--z_dim",        type=int,   default=512,
                    help="Latent z dimension")
-    p.add_argument("--w_dim",       type=int,   default=1024,
+    p.add_argument("--w_dim",        type=int,   default=1024,
                    help="Intermediate W dimension")
+    p.add_argument("--channel_cap",  type=int,   default=512,
+                   help="Max channels per layer (use 32-64 for CPU runs)")
     p.add_argument("--lr_G",        type=float, default=2e-4)
     p.add_argument("--lr_D",        type=float, default=1e-4)
     # R1 regularisation
@@ -452,8 +460,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--warmup_steps",type=int,   default=1000)
     # Misc
     p.add_argument("--save_dir",    type=str,   default="./checkpoints")
-    p.add_argument("--save_every",  type=int,   default=10)
-    p.add_argument("--resume",      type=str,   default=None)
+    p.add_argument("--save_every",      type=int,   default=10)
+    p.add_argument("--resume",          type=str,   default=None)
+    p.add_argument("--steps_per_epoch", type=int,   default=0,
+                   help="Cap steps per epoch (0=full epoch). Use for CPU runs.")
     return p.parse_args()
 
 

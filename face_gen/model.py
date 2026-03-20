@@ -47,6 +47,10 @@ def _nf(stage: int, base: int = 32, cap: int = 512) -> int:
     return min(base << (8 - stage), cap)
 
 
+def _nf_custom(stage: int, cap: int) -> int:
+    return _nf(stage, base=max(cap // 16, 1), cap=cap)
+
+
 # ---------------------------------------------------------------------------
 # Equalized learning-rate wrappers
 # ---------------------------------------------------------------------------
@@ -154,7 +158,10 @@ class MultiHeadSelfAttention2d(nn.Module):
 
     def __init__(self, channels: int, num_heads: int = 8):
         super().__init__()
-        assert channels % num_heads == 0
+        # Ensure num_heads divides channels evenly
+        while channels % num_heads != 0:
+            num_heads = num_heads // 2
+        num_heads = max(num_heads, 1)
         self.num_heads = num_heads
         self.head_dim = channels // num_heads
         self.scale = self.head_dim ** -0.5
@@ -236,7 +243,8 @@ class SynthesisBlock(nn.Module):
     """
 
     def __init__(self, in_ch: int, out_ch: int, w_dim: int,
-                 upsample: bool = True, has_attention: bool = False):
+                 upsample: bool = True, has_attention: bool = False,
+                 num_heads: int = 8):
         super().__init__()
         self.has_attention = has_attention
 
@@ -248,7 +256,7 @@ class SynthesisBlock(nn.Module):
         self.noise2 = NoiseInjection()
 
         if has_attention:
-            self.attn = MultiHeadSelfAttention2d(out_ch, num_heads=8)
+            self.attn = MultiHeadSelfAttention2d(out_ch, num_heads=num_heads)
 
         self.to_rgb = ModulatedConv2d(out_ch, 3, 1, w_dim, demodulate=False)
         self.act = nn.LeakyReLU(0.2, inplace=True)
@@ -288,7 +296,7 @@ class Generator(nn.Module):
     ~120M trainable parameters.
     """
 
-    def __init__(self, z_dim: int = 512, w_dim: int = 1024):
+    def __init__(self, z_dim: int = 512, w_dim: int = 1024, channel_cap: int = 512):
         super().__init__()
         self.z_dim = z_dim
 
@@ -296,14 +304,15 @@ class Generator(nn.Module):
         self.mapping = MappingNetwork(z_dim=z_dim, w_dim=w_dim,
                                       depth=16, num_layers=NUM_BLOCKS)
 
-        # Channel schedule: 512/512/512/512/256/128
-        channels = [_nf(s) for s in range(1, NUM_BLOCKS + 1)]
+        # Channel schedule respects channel_cap (reduce for CPU runs)
+        channels = [_nf_custom(s, channel_cap) for s in range(1, NUM_BLOCKS + 1)]
         # channels = [512, 512, 512, 512, 256, 128]
 
         self.const = nn.Parameter(torch.randn(1, channels[0], 4, 4))
 
         # SynthesisBlocks; first block does NOT upsample (starts at 4x4 -> 8x8)
-        attn_at = {2, 3, 4}   # blocks at 16x16, 32x32, 64x64 (0-indexed: 2,3,4)
+        attn_at = {2, 3}   # blocks at 16x16 and 32x32 only (64x64 too large for CPU)
+        def _heads(ch): return max(1, min(8, ch // 4))
         self.blocks = nn.ModuleList([
             SynthesisBlock(
                 in_ch=channels[max(i - 1, 0)],
@@ -311,6 +320,7 @@ class Generator(nn.Module):
                 w_dim=w_dim,
                 upsample=(i > 0),
                 has_attention=(i in attn_at),
+                num_heads=_heads(channels[i]),
             )
             for i in range(NUM_BLOCKS)
         ])
@@ -323,17 +333,19 @@ class Generator(nn.Module):
             if isinstance(m, (nn.Conv2d,)) and not isinstance(m, ModulatedConv2d):
                 nn.init.kaiming_normal_(m.weight, a=0.2)
 
+    def synthesis_forward(self, ws: list[torch.Tensor]) -> torch.Tensor:
+        """Run only the synthesis network given a pre-computed list of w vectors."""
+        x = self.const.expand(ws[0].size(0), -1, -1, -1)
+        rgb = None
+        for block, w in zip(self.blocks, ws):
+            x, rgb = block(x, w, prev_rgb=rgb)
+        return self.final_act(rgb)
+
     def forward(self, z: torch.Tensor,
                 mixing_z: Optional[torch.Tensor] = None,
                 mixing_layer: Optional[int] = None) -> torch.Tensor:
         ws = self.mapping(z, mixing_z=mixing_z, mixing_layer=mixing_layer)
-
-        x = self.const.expand(z.size(0), -1, -1, -1)
-        rgb = None
-        for block, w in zip(self.blocks, ws):
-            x, rgb = block(x, w, prev_rgb=rgb)
-
-        return self.final_act(rgb)
+        return self.synthesis_forward(ws)
 
 
 # ---------------------------------------------------------------------------
@@ -409,20 +421,22 @@ class Discriminator(nn.Module):
     ~95M trainable parameters.
     """
 
-    def __init__(self):
+    def __init__(self, channel_cap: int = 512):
         super().__init__()
 
-        # Channel schedule (mirrors G reversed)
-        chs = [128, 256, 512, 512, 512, 512, 512]
+        # Channel schedule (mirrors G reversed), respects channel_cap
+        full = [128, 256, 512, 512, 512, 512, 512]
+        chs = [min(c, channel_cap) for c in full]
 
         self.from_rgb = spectral_norm(nn.Conv2d(3, chs[0], 3, stride=2, padding=1))
 
-        attn_at = {0, 1, 2}   # after from_rgb at 64x64, after b0 at 32x32, after b1 at 16x16
+        attn_at = {1, 2}   # after b0 at 32x32, after b1 at 16x16 (64x64 too large for CPU)
         self.blocks = nn.ModuleList([
             DResBlock(chs[i], chs[i + 1]) for i in range(len(chs) - 1)
         ])
+        def _heads(ch): return max(1, min(8, ch // 4))
         self.attns = nn.ModuleDict({
-            str(i): MultiHeadSelfAttention2d(chs[i + 1], num_heads=8)
+            str(i): MultiHeadSelfAttention2d(chs[i + 1], num_heads=_heads(chs[i + 1]))
             for i in attn_at
         })
 
@@ -433,8 +447,7 @@ class Discriminator(nn.Module):
         self.head = nn.Sequential(
             spectral_norm(nn.Conv2d(chs[-1] + mbstd_features, chs[-1], 3, padding=1)),
             nn.LeakyReLU(0.2, inplace=True),
-            spectral_norm(nn.Conv2d(chs[-1], chs[-1], 2)),  # 2x2 -> 1x1
-            nn.LeakyReLU(0.2, inplace=True),
+            nn.AdaptiveAvgPool2d(1),   # works regardless of spatial size
             nn.Flatten(),
         )
         self.out = spectral_norm(nn.Linear(chs[-1], 1))
