@@ -1,15 +1,21 @@
 """
-Generate face images from a trained checkpoint.
+Generate face images from a trained Ultra checkpoint.
 
 Usage:
-    # Generate 16 random faces
-    python generate.py --checkpoint checkpoints/ckpt_epoch_0099.pt --count 16
+    # 16 random faces
+    python generate.py --checkpoint checkpoints/ckpt_epoch_0499.pt
 
-    # Generate from a specific seed for reproducibility
-    python generate.py --checkpoint checkpoints/ckpt_epoch_0099.pt --seed 42 --count 4
+    # Reproducible
+    python generate.py --checkpoint checkpoints/ckpt_epoch_0499.pt --seed 42 --count 4
 
-    # Supply your own noise tensor (numpy .npy file, shape [N, 128])
-    python generate.py --checkpoint checkpoints/ckpt_epoch_0099.pt --noise_file my_noise.npy
+    # Style mixing: blend two latent codes at layer 3
+    python generate.py --checkpoint checkpoints/ckpt_epoch_0499.pt --mixing --mix_layer 3
+
+    # Custom noise (.npy, shape [N, z_dim])
+    python generate.py --checkpoint checkpoints/ckpt_epoch_0499.pt --noise_file my_noise.npy
+
+    # Latent interpolation between two random faces (10 steps)
+    python generate.py --checkpoint checkpoints/ckpt_epoch_0499.pt --interpolate --steps 10
 """
 
 import argparse
@@ -21,56 +27,74 @@ from torchvision import utils
 from model import Generator
 
 
-def load_generator(checkpoint_path: str, latent_dim: int, device: torch.device) -> Generator:
-    ckpt = torch.load(checkpoint_path, map_location=device)
-    G = Generator(latent_dim=latent_dim).to(device)
-    # Prefer EMA weights when available (better quality)
+def load_generator(checkpoint_path: str, z_dim: int, w_dim: int,
+                   device: torch.device) -> Generator:
+    ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    G = Generator(z_dim=z_dim, w_dim=w_dim).to(device)
     key = "G_ema" if "G_ema" in ckpt else "G"
     G.load_state_dict(ckpt[key])
-    print(f"Loaded weights from checkpoint key '{key}'")
+    print(f"Loaded weights from '{key}' (checkpoint epoch {ckpt.get('epoch', '?')})")
     G.eval()
     return G
 
 
 def generate(args: argparse.Namespace) -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Device: {device}")
+    G = load_generator(args.checkpoint, args.z_dim, args.w_dim, device)
 
-    G = load_generator(args.checkpoint, args.latent_dim, device)
+    if args.seed is not None:
+        torch.manual_seed(args.seed)
 
-    # Build noise input
+    # ---- Build noise input ----
     if args.noise_file:
         arr = np.load(args.noise_file)
-        noise = torch.tensor(arr, dtype=torch.float32, device=device)
-        print(f"Loaded noise from {args.noise_file}, shape: {noise.shape}")
+        z = torch.tensor(arr, dtype=torch.float32, device=device)
+        print(f"Loaded z from {args.noise_file}, shape {z.shape}")
     else:
-        if args.seed is not None:
-            torch.manual_seed(args.seed)
-        noise = torch.randn(args.count, args.latent_dim, device=device)
-        print(f"Generated random noise, shape: {noise.shape}")
+        z = torch.randn(args.count, args.z_dim, device=device)
+
+    # ---- Latent interpolation mode ----
+    if args.interpolate:
+        z_a = torch.randn(1, args.z_dim, device=device)
+        z_b = torch.randn(1, args.z_dim, device=device)
+        ts  = torch.linspace(0, 1, args.steps, device=device)
+        z   = torch.stack([z_a + t * (z_b - z_a) for t in ts]).squeeze(1)
+        print(f"Interpolating {args.steps} steps between two latent codes")
+
+    # ---- Style mixing ----
+    mix_z, mix_layer = None, None
+    if args.mixing:
+        mix_z = torch.randn_like(z)
+        mix_layer = args.mix_layer
+        print(f"Style mixing at layer {mix_layer}")
 
     with torch.no_grad():
-        images = G(noise)  # (N, 3, 128, 128) in [-1, 1]
+        images = G(z, mixing_z=mix_z, mixing_layer=mix_layer)
 
-    out_path = args.output
-    utils.save_image(images, out_path, normalize=True, value_range=(-1, 1),
+    out = args.output
+    utils.save_image(images, out, normalize=True, value_range=(-1, 1),
                      nrow=max(1, int(images.size(0) ** 0.5)))
-    print(f"Saved {images.size(0)} face(s) → {out_path}")
+    print(f"Saved {images.size(0)} face(s) -> {out}")
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Generate faces from trained GAN")
-    parser.add_argument("--checkpoint", type=str, required=True,
-                        help="Path to .pt checkpoint file")
-    parser.add_argument("--latent_dim", type=int, default=256)
-    parser.add_argument("--count", type=int, default=16,
-                        help="Number of faces to generate (ignored if --noise_file given)")
-    parser.add_argument("--seed", type=int, default=None,
-                        help="Random seed for reproducibility")
-    parser.add_argument("--noise_file", type=str, default=None,
-                        help="Optional .npy file with custom noise vectors (shape [N, latent_dim])")
-    parser.add_argument("--output", type=str, default="generated_faces.png")
-    return parser.parse_args()
+    p = argparse.ArgumentParser()
+    p.add_argument("--checkpoint",  type=str, required=True)
+    p.add_argument("--z_dim",       type=int, default=512)
+    p.add_argument("--w_dim",       type=int, default=1024)
+    p.add_argument("--count",       type=int, default=16)
+    p.add_argument("--seed",        type=int, default=None)
+    p.add_argument("--noise_file",  type=str, default=None)
+    p.add_argument("--output",      type=str, default="generated_faces.png")
+    p.add_argument("--interpolate", action="store_true",
+                   help="Generate a latent interpolation strip")
+    p.add_argument("--steps",       type=int, default=10,
+                   help="Number of interpolation steps")
+    p.add_argument("--mixing",      action="store_true",
+                   help="Apply style mixing between two random latent codes")
+    p.add_argument("--mix_layer",   type=int, default=3,
+                   help="Synthesis block index where style crossover happens")
+    return p.parse_args()
 
 
 if __name__ == "__main__":
