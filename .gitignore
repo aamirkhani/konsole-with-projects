@@ -16,3 +16,10 @@ Makefile
 .vscode/
 .idea/
 compile_commands.json
+
+# Face GAN training artifacts
+checkpoints/
+data/
+training.log
+**/__pycache__/
+*.pyc
