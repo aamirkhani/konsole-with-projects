@@ -24,7 +24,10 @@ from model import Generator
 def load_generator(checkpoint_path: str, latent_dim: int, device: torch.device) -> Generator:
     ckpt = torch.load(checkpoint_path, map_location=device)
     G = Generator(latent_dim=latent_dim).to(device)
-    G.load_state_dict(ckpt["G"])
+    # Prefer EMA weights when available (better quality)
+    key = "G_ema" if "G_ema" in ckpt else "G"
+    G.load_state_dict(ckpt[key])
+    print(f"Loaded weights from checkpoint key '{key}'")
     G.eval()
     return G
 
@@ -59,7 +62,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate faces from trained GAN")
     parser.add_argument("--checkpoint", type=str, required=True,
                         help="Path to .pt checkpoint file")
-    parser.add_argument("--latent_dim", type=int, default=128)
+    parser.add_argument("--latent_dim", type=int, default=256)
     parser.add_argument("--count", type=int, default=16,
                         help="Number of faces to generate (ignored if --noise_file given)")
     parser.add_argument("--seed", type=int, default=None,
