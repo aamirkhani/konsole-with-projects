@@ -1,0 +1,56 @@
+# Bare-metal alternative to the container path.
+# Installs as a systemd USER service. Run under a dedicated unprivileged user
+# whose only job is hosting this Chromium-over-RDP session.
+#
+# Install:
+#   sudo useradd -m -G video,render chromium-rdp
+#   sudo loginctl enable-linger chromium-rdp
+#   sudo -u chromium-rdp mkdir -p ~chromium-rdp/.config/systemd/user
+#   sudo cp chromium-rdp.service ~chromium-rdp/.config/systemd/user/
+#   sudo machinectl shell chromium-rdp@ -- systemctl --user daemon-reload
+#   sudo machinectl shell chromium-rdp@ -- systemctl --user enable --now chromium-rdp
+#
+# Logs:  sudo journalctl --user-unit chromium-rdp -u chromium-rdp -f --user chromium-rdp
+
+[Unit]
+Description=Headless GPU Chromium over RDP (gnome-remote-desktop)
+Documentation=https://gitlab.gnome.org/GNOME/gnome-remote-desktop
+After=default.target pipewire.service
+Wants=pipewire.service
+StartLimitBurst=3
+StartLimitIntervalSec=120
+
+[Service]
+Type=simple
+Environment=XDG_RUNTIME_DIR=%t
+Environment=XDG_SESSION_TYPE=wayland
+Environment=XDG_CURRENT_DESKTOP=GNOME
+Environment=WAYLAND_DISPLAY=wayland-0
+Environment=GDK_BACKEND=wayland
+Environment=MOZ_ENABLE_WAYLAND=1
+Environment=RDP_USER=rdpuser
+# Replace via systemctl --user edit chromium-rdp BEFORE first start.
+Environment=RDP_PASSWORD=changeme
+Environment=RDP_PORT=3389
+Environment=SCREEN_GEOMETRY=1920x1080@60
+Environment=HOME_URL=about:blank
+Environment=KEYRING_PASSWORD=keyring
+
+ExecStart=/usr/local/bin/chromium-rdp-entrypoint.sh
+
+# Restart on crash, but back off so a flapping mutter doesn't pin the GPU.
+# (StartLimit* directives belong in [Unit] and are set above.)
+Restart=on-failure
+RestartSec=10
+
+# Sandbox what we can without breaking GPU access.
+NoNewPrivileges=true
+PrivateTmp=false
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h /data
+DeviceAllow=/dev/dri rw
+DeviceAllow=/dev/snd rw
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,111 @@
+# Headless GPU-accelerated Chromium hosted over RDP via gnome-remote-desktop.
+#
+# Architecture inside this image:
+#   dumb-init (PID1)
+#     ├── dbus-daemon (session bus)
+#     ├── gnome-keyring-daemon (libsecret backend for grdctl credentials)
+#     ├── pipewire + wireplumber + pipewire-pulse (audio + screencast IPC)
+#     ├── xdg-desktop-portal + xdg-desktop-portal-gnome (ScreenCast portal)
+#     ├── mutter --headless --wayland --virtual-monitor (GPU compositor)
+#     ├── gnome-remote-desktop-daemon (RDP server, AVC444 hw-accel)
+#     └── chromium --ozone-platform=wayland (the payload)
+#
+# Build:    docker build -t chromium-rdp .
+# Run:      see compose.yaml or README.md (needs --device /dev/dri)
+#
+# Tested base: Fedora 41 (mutter 47, gnome-remote-desktop 47, chromium 131+).
+
+FROM fedora:41
+
+ENV LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    XDG_RUNTIME_DIR=/tmp/runtime-rdpuser \
+    XDG_SESSION_TYPE=wayland \
+    XDG_CURRENT_DESKTOP=GNOME \
+    WAYLAND_DISPLAY=wayland-0 \
+    GDK_BACKEND=wayland \
+    MOZ_ENABLE_WAYLAND=1 \
+    LIBVA_DRIVER_NAME= \
+    RDP_USER=rdpuser \
+    RDP_PORT=3389 \
+    SCREEN_GEOMETRY=1920x1080@60 \
+    HOME_URL=about:blank \
+    KEYRING_PASSWORD=keyring
+# RDP_PASSWORD is deliberately NOT defaulted: the entrypoint fails fast if it
+# is unset, forcing the operator to inject it via compose env or `docker run -e`.
+
+# RPMFusion provides mesa-va-drivers-freeworld (full H.264/HEVC VA-API codec
+# support for AMD/Intel). Fedora's stock mesa-va-drivers is patent-stripped
+# and lacks the encoders grd's hw-accel path wants.
+RUN dnf -y install \
+        "https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-41.noarch.rpm" \
+        "https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-41.noarch.rpm" \
+    && dnf clean all
+
+# Compositor + RDP + portals + audio + GPU userspace + Chromium.
+# --setopt=install_weak_deps=False keeps the image lean; we add the few weak
+# deps we actually need explicitly.
+RUN dnf -y --setopt=install_weak_deps=False --allowerasing install \
+        dumb-init \
+        dbus-daemon \
+        dbus-tools \
+        gnome-keyring \
+        libsecret \
+        mutter \
+        gnome-remote-desktop \
+        xdg-desktop-portal \
+        xdg-desktop-portal-gnome \
+        xdg-desktop-portal-gtk \
+        pipewire \
+        pipewire-pulseaudio \
+        wireplumber \
+        chromium \
+        mesa-dri-drivers \
+        mesa-libGL \
+        mesa-libEGL \
+        mesa-vulkan-drivers \
+        mesa-va-drivers-freeworld \
+        intel-media-driver \
+        libva-utils \
+        vulkan-tools \
+        libei \
+        libei-utils \
+        wl-clipboard \
+        openssl \
+        socat \
+        ca-certificates \
+        glibc-langpack-en \
+        procps-ng \
+        iproute \
+        sudo \
+    && dnf clean all \
+    && rm -rf /var/cache/dnf
+
+# Non-root runtime user. UID 1000 matches typical host video/render gid passing.
+RUN useradd --create-home --uid 1000 --shell /bin/bash rdpuser \
+    && usermod -aG video,render rdpuser \
+    && mkdir -p /data /data/profile /data/cache \
+    && chown -R rdpuser:rdpuser /data
+
+COPY scripts/entrypoint.sh        /usr/local/bin/entrypoint.sh
+COPY scripts/provision-grd.sh     /usr/local/bin/provision-grd.sh
+COPY scripts/launch-chromium.sh   /usr/local/bin/launch-chromium.sh
+COPY scripts/healthcheck.sh       /usr/local/bin/healthcheck.sh
+COPY etc/chromium-policies.json   /etc/chromium/policies/managed/chromium-rdp.json
+
+RUN chmod 0755 /usr/local/bin/entrypoint.sh \
+               /usr/local/bin/provision-grd.sh \
+               /usr/local/bin/launch-chromium.sh \
+               /usr/local/bin/healthcheck.sh \
+    && mkdir -p /etc/chromium/policies/managed \
+    && chown rdpuser:rdpuser /etc/chromium/policies/managed/chromium-rdp.json
+
+USER rdpuser
+WORKDIR /home/rdpuser
+
+EXPOSE 3389/tcp 3389/udp
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=45s --retries=3 \
+    CMD /usr/local/bin/healthcheck.sh
+
+ENTRYPOINT ["/usr/bin/dumb-init", "--", "/usr/local/bin/entrypoint.sh"]

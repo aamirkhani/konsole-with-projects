@@ -1,0 +1,17 @@
+{
+  "_comment": "Enterprise policies loaded by Chromium at startup. We force the clipboard image path on, disable telemetry probes that would phone home from a kiosk, and keep the first-run flow quiet.",
+
+  "HardwareAccelerationModeEnabled": true,
+  "DefaultClipboardSetting": 1,
+  "ClipboardAllowedForUrls": ["*"],
+  "BackgroundModeEnabled": false,
+  "MetricsReportingEnabled": false,
+  "PromotionalTabsEnabled": false,
+  "WelcomePageOnOSUpgradeEnabled": false,
+  "DefaultBrowserSettingEnabled": false,
+  "PasswordManagerEnabled": true,
+  "AutofillAddressEnabled": true,
+  "AutofillCreditCardEnabled": true,
+  "SafeBrowsingProtectionLevel": 1,
+  "ComponentUpdatesEnabled": true
+}

@@ -1,0 +1,70 @@
+# Production launch profile.
+#
+#   docker compose up -d --build
+#   docker compose logs -f
+#   docker compose exec chromium-rdp /usr/local/bin/healthcheck.sh
+#
+# Connect any RDP client (mstsc, FreeRDP, Remmina) to <host>:3389 with the
+# credentials in the environment block below. CHANGE THE PASSWORD before
+# exposing this beyond localhost.
+
+services:
+  chromium-rdp:
+    build:
+      context: .
+      dockerfile: Containerfile
+    image: chromium-rdp:latest
+    container_name: chromium-rdp
+    restart: unless-stopped
+
+    # GPU passthrough. The render node is what mutter and Chromium's GPU
+    # process consume. `video` and `render` gids must exist inside the
+    # container with the same numeric IDs as on the host — Fedora's defaults
+    # match Ubuntu/Debian/RHEL hosts.
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - video
+      - render
+
+    # tmpfs for /tmp keeps XDG_RUNTIME_DIR off the overlay fs (faster, and
+    # required by some Wayland clients that refuse non-tmpfs runtime dirs).
+    tmpfs:
+      - /tmp:exec,size=512m
+
+    # Profile + cache survive container restarts. Without this, every restart
+    # gives you a fresh Chromium profile and loses all your tabs.
+    volumes:
+      - chromium-profile:/data/profile
+      - chromium-cache:/data/cache
+
+    environment:
+      RDP_USER: rdpuser
+      # No default — supply via .env (RDP_PASSWORD=...) or `-e RDP_PASSWORD=...`.
+      # The container's entrypoint fails fast if this is unset.
+      RDP_PASSWORD: ${RDP_PASSWORD:?must be set; export RDP_PASSWORD or write it to .env}
+      RDP_PORT: "3389"
+      SCREEN_GEOMETRY: 1920x1080@60
+      HOME_URL: about:blank
+      # LIBVA_DRIVER_NAME: iHD     # uncomment to pin (iHD/i965/radeonsi/nvidia)
+      # EXTRA_CHROMIUM_FLAGS: "--lang=en-US"
+
+    ports:
+      - "3389:3389/tcp"
+      - "3389:3389/udp"     # RDPUDP for sub-RTT input
+
+    # Limits sized for a single concurrent session at 1080p60.
+    shm_size: 2gb
+    ulimits:
+      nofile: 65536
+
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/healthcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      start_period: 45s
+      retries: 3
+
+volumes:
+  chromium-profile:
+  chromium-cache:
