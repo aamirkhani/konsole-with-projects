@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Stub vainfo. The auto-detect loop in entrypoint.sh probes drivers in order;
+# we accept iHD to exercise that branch, reject the rest.
+case "${LIBVA_DRIVER_NAME:-}" in
+    iHD) echo "Driver version: stub iHD driver"; exit 0 ;;
+    *)   exit 1 ;;
+esac

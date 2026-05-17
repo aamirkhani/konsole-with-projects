@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Stub grdctl: accept any subcommand, succeed, fake a status line.
+case "${1:-}" in
+    status) echo "RDP: enabled, port=${RDP_PORT:-13389}, hw-accel=yes" ;;
+    *) ;;
+esac
+exit 0

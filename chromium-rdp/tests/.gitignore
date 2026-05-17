@@ -1,0 +1,4 @@
+# Binary stubs are created at test-setup time (cp /usr/bin/sleep ...).
+# They're per-architecture and have no business living in the repo.
+stubs/chromium
+stubs/chromium-browser

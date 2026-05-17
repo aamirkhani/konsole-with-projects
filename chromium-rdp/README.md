@@ -118,6 +118,9 @@ the container), and (b) whether the RDP client negotiates RDPUDP.
 Run these in order when bringing up a host. Each step verifies one layer.
 
 ```bash
+# 0. Orchestration logic (no GPU, no GNOME needed; runs anywhere with bash + python3)
+./tests/run-tests.sh
+
 # 1. Host pre-flight (kernel, render node, perms, runtime)
 ./scripts/verify-host.sh
 
@@ -125,6 +128,7 @@ Run these in order when bringing up a host. Each step verifies one layer.
 docker compose build
 
 # 3. Bring it up
+export RDP_PASSWORD='something-real'
 docker compose up -d
 
 # 4. Container health (Wayland socket, RDP port, Chromium PID)
@@ -142,6 +146,26 @@ docker compose exec chromium-rdp grdctl status
 #    - copy image from a webpage, paste into a local image editor
 #    - youtube.com plays without dropping frames
 ```
+
+### What `tests/run-tests.sh` covers
+
+Stub-driven integration tests for `entrypoint.sh`, `provision-grd.sh`,
+`launch-chromium.sh`, and `healthcheck.sh`. They substitute every external
+binary (mutter, grd-daemon, chromium, grdctl, dbus-launch, gnome-keyring,
+pipewire, portal, vainfo) with a stub that simulates the relevant behaviour
+— socket creation, port bind, intentional death, etc. — and verify:
+
+| Scenario                                                     | Asserts                                       |
+|--------------------------------------------------------------|-----------------------------------------------|
+| unset `RDP_PASSWORD`                                         | entrypoint exits 1 with the expected message  |
+| placeholder `RDP_PASSWORD=changeme`                          | same                                          |
+| happy path                                                   | reaches "all subsystems up", binds RDP port, opens Wayland socket |
+| mutter dies during startup                                   | supervisor catches it, reports                |
+| grd-daemon dies during startup                               | same                                          |
+| `provision-grd.sh` with no pre-existing cert                 | generates self-signed TLS cert at the expected path |
+| `healthcheck.sh` with all predicates holding                 | exit 0, logs "healthy"                        |
+| `healthcheck.sh` with Wayland socket absent                  | exit 1, names the failing predicate           |
+| `launch-chromium.sh` with only `chromium-browser` on PATH    | picks it; passes Wayland, profile, clipboard, and VA-API flags |
 
 ## What is NOT included
 

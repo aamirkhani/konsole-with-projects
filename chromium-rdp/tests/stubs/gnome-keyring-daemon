@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Stub gnome-keyring-daemon: drain passphrase from stdin, emit env assignments.
+cat >/dev/null 2>/dev/null || true
+echo "GNOME_KEYRING_CONTROL=/tmp/keyring-stub-$$"
+echo "SSH_AUTH_SOCK=/tmp/ssh-stub-$$"
+exit 0

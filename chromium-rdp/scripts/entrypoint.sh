@@ -75,8 +75,10 @@ pipewire-pulse &
 # 5. xdg-desktop-portal + GNOME backend (ScreenCast + RemoteDesktop portals)
 # ---------------------------------------------------------------------------
 log "starting xdg-desktop-portal"
-/usr/libexec/xdg-desktop-portal -r &
-/usr/libexec/xdg-desktop-portal-gnome &
+# Binary paths are env-overridable so the script can be exercised against
+# stubs in tests, and so operators can point at non-standard layouts.
+"${XDP_BIN:-/usr/libexec/xdg-desktop-portal}" -r &
+"${XDP_GNOME_BIN:-/usr/libexec/xdg-desktop-portal-gnome}" &
 
 # ---------------------------------------------------------------------------
 # 6. Mutter as headless Wayland compositor with one virtual monitor
@@ -106,7 +108,7 @@ done
 # 7. Provision gnome-remote-desktop (credentials, transport, port)
 # ---------------------------------------------------------------------------
 log "provisioning gnome-remote-desktop"
-/usr/local/bin/provision-grd.sh
+"${PROVISION_GRD:-/usr/local/bin/provision-grd.sh}"
 
 # ---------------------------------------------------------------------------
 # 8. gnome-remote-desktop daemon (RDP server)
@@ -114,7 +116,7 @@ log "provisioning gnome-remote-desktop"
 log "starting gnome-remote-desktop-daemon"
 # Force VA-API encode path when available; falls back gracefully otherwise.
 export GRD_ENABLE_HW_ACCEL=1
-/usr/libexec/gnome-remote-desktop-daemon &
+"${GRD_DAEMON_BIN:-/usr/libexec/gnome-remote-desktop-daemon}" &
 # shellcheck disable=SC2034  # read via indirect expansion in the supervisor loop
 GRD_PID=$!
 
@@ -137,7 +139,7 @@ done
 # 9. Chromium (the payload)
 # ---------------------------------------------------------------------------
 log "starting chromium"
-/usr/local/bin/launch-chromium.sh &
+"${LAUNCH_CHROMIUM:-/usr/local/bin/launch-chromium.sh}" &
 # shellcheck disable=SC2034  # read via indirect expansion in the supervisor loop
 CHROMIUM_PID=$!
 

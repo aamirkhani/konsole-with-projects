@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Generic stub used by pipewire / wireplumber / portal binaries — block until killed.
+exec sleep 999

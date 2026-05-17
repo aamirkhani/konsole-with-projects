@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Stub for grd-daemon. Modes via STUB_GRD_MODE:
+#   normal            - bind RDP_PORT and sleep
+#   no_bind           - sleep without binding (timeout test)
+#   die_immediately   - exit 1
+
+set -u
+port="${RDP_PORT:-13389}"
+
+case "${STUB_GRD_MODE:-normal}" in
+    die_immediately)
+        echo "stub-grd: dying on purpose" >&2
+        exit 1
+        ;;
+    no_bind)
+        exec sleep 999
+        ;;
+    normal|*)
+        exec python3 -c "
+import socket, signal, sys
+s = socket.socket()
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(('0.0.0.0', $port))
+s.listen(1)
+sys.stderr.write(f'stub-grd: listening on $port\n')
+sys.stderr.flush()
+signal.signal(signal.SIGTERM, lambda *a: sys.exit(0))
+signal.signal(signal.SIGINT,  lambda *a: sys.exit(0))
+signal.pause()
+"
+        ;;
+esac

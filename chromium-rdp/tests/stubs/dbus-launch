@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Stub dbus-launch: emit env assignments as the real one does in --sh-syntax mode.
+echo "DBUS_SESSION_BUS_ADDRESS='unix:abstract=/tmp/dbus-stub-${RANDOM}'"
+echo "DBUS_SESSION_BUS_PID=$$"
+exit 0

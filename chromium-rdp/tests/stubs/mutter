@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# Stub for `mutter --headless --wayland --no-x11 --virtual-monitor X --wayland-display Y`.
+# Behaviour modes selected by STUB_MUTTER_MODE:
+#   normal           - bind a real Unix socket at $XDG_RUNTIME_DIR/$display and sleep
+#   no_socket        - sleep without ever creating the socket (timeout test)
+#   die_immediately  - exit 1 right away (death test)
+
+set -u
+
+display=wayland-0
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --wayland-display) display="$2"; shift 2;;
+        *) shift;;
+    esac
+done
+
+case "${STUB_MUTTER_MODE:-normal}" in
+    die_immediately)
+        echo "stub-mutter: dying on purpose" >&2
+        exit 1
+        ;;
+    no_socket)
+        exec sleep 999
+        ;;
+    normal|*)
+        exec python3 -c "
+import socket, signal, sys, os
+path = os.path.join(os.environ['XDG_RUNTIME_DIR'], '$display')
+try: os.unlink(path)
+except FileNotFoundError: pass
+s = socket.socket(socket.AF_UNIX)
+s.bind(path)
+s.listen(1)
+sys.stderr.write(f'stub-mutter: wayland socket at {path}\n')
+sys.stderr.flush()
+signal.signal(signal.SIGTERM, lambda *a: sys.exit(0))
+signal.signal(signal.SIGINT,  lambda *a: sys.exit(0))
+signal.pause()
+"
+        ;;
+esac
